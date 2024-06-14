@@ -1,0 +1,115 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: maven:3.9.6-amazoncorretto-21
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Set up Maven local repository cache
+        uses: actions/cache@v3
+        with:
+          path: .m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Compile
+        run: mvn compile
+      - name: Save build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: target/*
+          retention-days: 2
+
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: maven:3.9.6-amazoncorretto-21
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Restore Maven local repository cache
+        uses: actions/cache@v3
+        with:
+          path: .m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build-artifacts
+          path: target
+      - name: Run tests
+        run: mvn test
+
+  package:
+    runs-on: ubuntu-latest
+    container:
+      image: maven:3.9.6-amazoncorretto-21
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Restore Maven local repository cache
+        uses: actions/cache@v3
+        with:
+          path: .m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: build-artifacts
+          path: target
+      - name: Package
+        run: mvn package
+      - name: Save package artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: package-artifacts
+          path: target/*.war
+          retention-days: 2
+
+  deploy_test:
+    runs-on: ubuntu-latest
+    needs: package
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      - name: Download package artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: package-artifacts
+          path: target
+      - name: Remove existing Docker container
+        run: docker rm --force tomcat || true
+      - name: Remove existing Docker image
+        run: docker image rm --force connect-four || true
+      - name: Build Docker image
+        run: docker build -t connect-four .
+      - name: Run Docker container
+        run: docker run --rm -d --name tomcat -p 8080:8080 tomcat:9.0
+
+  deploy_test_stop:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Remove Docker container
+        run: docker rm --force tomcat || true
+      - name: Remove Docker image
+        run: docker image rm --force connect-four || true
